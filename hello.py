@@ -17,10 +17,13 @@ import shutil #Kiem tra, xu li tep va thu muc
 import subprocess #thu vien dung de chay cac lenh he thong tu python
 import sys #Tuong tac voi trinh thong dich
 try:
-    import readline #Tao lich su dong lenh
+    import readline
 except ImportError:
-    import pyreadline as readline #neu 0 co san thi dung pyreadline thay the
+    import pyreadline3 as readline
 
+import os
+import sys
+import subprocess
 import signal #bat tin hieu he thong. Dung lenh, nhung k thoat shell: Ctrl + C
 import psutil #theo doi tien trinh he thong
 import time #cho doi, hen lap h
@@ -234,8 +237,24 @@ def execute_pipeline(cmds, background=False):
 
             # Start process
             try:
-                # preexec_fn=os.setpgrp to prevent child getting signals intended for shell (optional)
-                p = subprocess.Popen(args, stdin=stdin, stdout=stdout, stderr=subprocess.PIPE, preexec_fn=os.setpgrp)
+                if sys.platform == "win32":
+                    # Windows không có os.setpgrp → dùng CREATE_NEW_PROCESS_GROUP
+                    p = subprocess.Popen(
+                        args,
+                        stdin=stdin,
+                        stdout=stdout,
+                        stderr=subprocess.PIPE,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP
+                    )
+                else:
+                    # Linux/macOS → dùng preexec_fn=os.setpgrp
+                    p = subprocess.Popen(
+                        args,
+                        stdin=stdin,
+                        stdout=stdout,
+                        stderr=subprocess.PIPE,
+                        preexec_fn=os.setpgrp
+                    )
             except FileNotFoundError:
                 print(f"minishell: command {args[0]} not found, but can be installed with: ")
 
