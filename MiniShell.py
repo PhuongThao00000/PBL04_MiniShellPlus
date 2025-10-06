@@ -9,19 +9,15 @@ Features:
  - Background execution with trailing &
  - Command history (readline)
  - Ctrl+C handling (không thoát shell)
- - Hỗ trợ sudo: hỏi mật khẩu và chạy lệnh với quyền root
 """
 
 import os
-import pty
 import shlex
 import shutil
 import subprocess
 import sys
 import signal
 import time
-import getpass
-
 import psutil
 
 # ---------- History ----------
@@ -31,21 +27,58 @@ except ImportError:  # fallback cho Windows
     import pyreadline as readline
 
 HISTORY_FILE = os.path.expanduser("~/.minishell_history")
+MAX_HISTORY = 1000  # Giới hạn số lệnh lưu
+
+
+def init_readline():
+    """Cấu hình readline để hoạt động giống terminal Linux"""
+    try:
+        # Kiểm tra xem có đang chạy trong terminal thật không
+        if not sys.stdin.isatty():
+            print("Warning: Not running in a real terminal. History navigation may not work properly.")
+            print("Please run this script in a real terminal instead of IDE console.")
+            return
+
+        # Kích hoạt tìm kiếm history với Ctrl+R
+        readline.parse_and_bind("tab: complete")
+
+        # Phím mũi tên lên/xuống để duyệt history (mặc định có sẵn)
+        # Nhưng có thể cấu hình thêm:
+        readline.parse_and_bind("\\e[A: previous-history")  # Mũi tên lên
+        readline.parse_and_bind("\\e[B: next-history")  # Mũi tên xuống
+
+        # Ctrl+Left/Right để nhảy giữa các từ
+        readline.parse_and_bind("\\e[1;5D: backward-word")  # Ctrl+Left
+        readline.parse_and_bind("\\e[1;5C: forward-word")  # Ctrl+Right
+
+        # Emacs key bindings (giống bash)
+        readline.parse_and_bind("set editing-mode emacs")
+
+        # Tự động complete không phân biệt hoa/thường
+        readline.parse_and_bind("set completion-ignore-case on")
+
+        # Hiển thị tất cả matches nếu nhiều hơn 1
+        readline.parse_and_bind("set show-all-if-ambiguous on")
+
+    except Exception as e:
+        print(f"Warning: Could not configure readline: {e}", file=sys.stderr)
 
 
 def save_history():
     try:
+        readline.set_history_length(MAX_HISTORY)
         readline.write_history_file(HISTORY_FILE)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Warning: Could not save history: {e}", file=sys.stderr)
 
 
 def load_history():
     try:
         if os.path.exists(HISTORY_FILE):
             readline.read_history_file(HISTORY_FILE)
-    except Exception:
-        pass
+            readline.set_history_length(MAX_HISTORY)
+    except Exception as e:
+        print(f"Warning: Could not load history: {e}", file=sys.stderr)
 
 
 # ---------- Built-in commands ----------
@@ -69,25 +102,6 @@ def builtin_history():
     hlen = readline.get_current_history_length()
     for i in range(1, hlen + 1):
         print(f"{i}\t{readline.get_history_item(i)}")
-
-
-def run_with_sudo(command):
-    """
-    Hỏi mật khẩu và chạy lệnh sudo trong pseudo-terminal
-    """
-    password = getpass.getpass("sudo password: ")
-    master, slave = pty.openpty()
-    p = subprocess.Popen(
-        ["sudo", "-S"] + command,
-        stdin=master,
-        stdout=sys.stdout,
-        stderr=sys.stderr,
-        universal_newlines=True
-    )
-    os.write(master, (password + "\n").encode())
-    p.wait()
-    os.close(master)
-    os.close(slave)
 
 
 def builtin_pmon(interval=1.5, top_n=20):
@@ -242,8 +256,10 @@ def execute_pipeline(cmds, background=False):
             procs.append(p)
 
             if prev_stdout and prev_stdout is not sys.stdin:
-                try: prev_stdout.close()
-                except Exception: pass
+                try:
+                    prev_stdout.close()
+                except Exception:
+                    pass
             prev_stdout = p.stdout
 
         if background and procs:
@@ -259,8 +275,10 @@ def execute_pipeline(cmds, background=False):
 
     finally:
         for f in opened_files:
-            try: f.close()
-            except Exception: pass
+            try:
+                f.close()
+            except Exception:
+                pass
 
 
 # ---------- Prompt & main loop ----------
@@ -272,6 +290,7 @@ def prompt():
 
 
 def main_loop():
+    init_readline()  # Cấu hình readline trước
     load_history()
     try:
         while True:
@@ -280,19 +299,16 @@ def main_loop():
             except EOFError:
                 print()
                 break
+            except KeyboardInterrupt:
+                print("", flush=True)
+                continue
             if not line:
                 continue
 
-            # ---- Built-in ----
-            if line.startswith("sudo "):
-                parts = shlex.split(line)
-                if len(parts) > 1:
-                    run_with_sudo(parts[1:])
-                else:
-                    print("Usage: sudo <command>")
-                continue
+            # Lưu vào history (quan trọng!)
+            readline.add_history(line)
 
-            if line.startswith("cd "):
+            if line.startswith("cd"):
                 path = line[3:].strip() or os.path.expanduser("~")
                 try:
                     os.chdir(os.path.expanduser(path))
@@ -317,6 +333,7 @@ def main_loop():
                 execute_pipeline(cmds, background)
     finally:
         save_history()
+        print("Goodbye!")
 
 
 if __name__ == "__main__":
