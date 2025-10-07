@@ -50,6 +50,6 @@ LƯU Ý: Đối với LẦN ĐẦU clone project
 ## Pull dự án sau mỗi lần mở dự án
 - Mở dự án như hướng dẫn trên.
 - Mở terminal của IDE
-LƯU Ý: Nếu không có update gì trong MaterialDesignToolKit thì thực hiện các bước sau:
+LƯU Ý: Nếu không có update gì trong code thì thực hiện các bước sau:
 - gõ lệnh sau: ``git pull origin main``
 - Sau đó vào code như bình thường
