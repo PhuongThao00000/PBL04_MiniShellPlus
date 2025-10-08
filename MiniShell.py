@@ -28,6 +28,7 @@ except ImportError:  # fallback cho Windows
 
 HISTORY_FILE = os.path.expanduser("~/.minishell_history")
 MAX_HISTORY = 1000  # Giới hạn số lệnh lưu
+last_status = 0
 
 
 def init_readline():
@@ -97,11 +98,47 @@ Features:
   sudo <cmd>    : run command with root privileges
 """)
 
+# --- Process Management ---
+background_jobs = {}  # pid → command string
+def handle_sigchld(signum, frame):
+    """Dọn zombie và thông báo khi tiến trình nền kết thúc"""
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+            if pid == 0:
+                break
+            if pid in background_jobs:
+                print(f"\n[{pid}] finished: {background_jobs.pop(pid)}")
+        except ChildProcessError:
+            break
+        except Exception:
+            break
+
+signal.signal(signal.SIGCHLD, handle_sigchld) #in message trong handle_sigchld() thong bao khi xong
 
 def builtin_history():
     hlen = readline.get_current_history_length()
     for i in range(1, hlen + 1):
         print(f"{i}\t{readline.get_history_item(i)}")
+
+def builtin_pmon():
+    """Hiển thị danh sách tiến trình nền đang chạy"""
+    if not background_jobs:
+        print("No background jobs.")
+        return
+    print(f"{'PID':<8} {'Command'}")
+    print("-" * 40)
+    for pid, cmd in background_jobs.items():
+        try:
+            if psutil.pid_exists(pid):
+                p = psutil.Process(pid)
+                status = p.status()
+                print(f"{pid:<8} {cmd}  [{status}]")
+            else:
+                print(f"{pid:<8} {cmd}  [terminated]")
+        except Exception:
+            print(f"{pid:<8} {cmd}  [unknown]")
+
 
 # ---------- Signal ----------
 def handle_sigint(signum, frame):
@@ -174,8 +211,8 @@ def build_popen_args(cmd_str):
 def run_external(args, stdin=None, stdout=None):
     """
     Chạy lệnh ngoài:
-      * Nếu không tìm thấy: gợi ý apt install (Ubuntu/Debian)
-      * Nếu có: chạy subprocess
+      - Nếu không tìm thấy: gợi ý apt install
+      - Nếu có: chạy subprocess với nhóm tiến trình riêng
     """
     try:
         if shutil.which(args[0]) is None:
@@ -184,15 +221,17 @@ def run_external(args, stdin=None, stdout=None):
                     ["apt-cache", "search", f"^{args[0]}$"],
                     capture_output=True, text=True
                 )
+                last_status = res.returncode
                 if res.stdout.strip():
                     print(f"minishell: command '{args[0]}' not found. Install with:")
                     print(f"  sudo apt install {args[0]}")
                 else:
-                    print(f"minishell: command '{args[0]}' not found. Maybe the text is wrong. Please try again.")
+                    print(f"minishell: command '{args[0]}' not found. Maybe the text is wrong.")
             except FileNotFoundError:
                 print(f"minishell: command '{args[0]}' not found.")
             return None
 
+        # preexec_fn=os.setpgrp giúp tách process group → Ctrl+C không kill shell
         return subprocess.Popen(
             args,
             stdin=stdin,
@@ -200,13 +239,21 @@ def run_external(args, stdin=None, stdout=None):
             stderr=subprocess.PIPE,
             preexec_fn=os.setpgrp
         )
+    except PermissionError:
+        print(f"minishell: permission denied: {args[0]}")
+        return None
+    except FileNotFoundError:
+        print(f"minishell: command not found: {args[0]}")
+        return None
     except Exception as e:
         print(f"minishell: failed to execute '{args[0]}': {e}")
         return None
 
 
 # ---------- Pipeline executor ----------
+# ---------- Pipeline executor ----------
 def execute_pipeline(cmds, background=False):
+    global last_status
     procs, opened_files = [], []
     prev_stdout = None
 
@@ -214,6 +261,7 @@ def execute_pipeline(cmds, background=False):
         for idx, cmd_str in enumerate(cmds):
             args, stdin_f, stdout_f = build_popen_args(cmd_str)
             if not args:
+                last_status = 1
                 break
 
             stdin = stdin_f if idx == 0 and stdin_f else prev_stdout
@@ -223,12 +271,15 @@ def execute_pipeline(cmds, background=False):
                 else None
             )
 
-            if stdin_f: opened_files.append(stdin_f)
-            if stdout_f: opened_files.append(stdout_f)
+            if stdin_f:
+                opened_files.append(stdin_f)
+            if stdout_f:
+                opened_files.append(stdout_f)
 
             p = run_external(args, stdin=stdin, stdout=stdout)
             if not p:
-                break
+                last_status = 127  # Command not found
+                return
             procs.append(p)
 
             if prev_stdout and prev_stdout is not sys.stdin:
@@ -238,16 +289,32 @@ def execute_pipeline(cmds, background=False):
                     pass
             prev_stdout = p.stdout
 
+        # ---- Background ----
         if background and procs:
-            print(f"[{procs[-1].pid}] started in background")
+            cmdline = " | ".join(cmds)
+            background_jobs[procs[-1].pid] = cmdline
+            print(f"[{procs[-1].pid}] started in background: {cmdline}")
+            last_status = 0
             return
 
+        # ---- Foreground ----
+        exit_code = 0
         for p in procs[:-1]:
             p.wait()
+
         if procs:
             out, err = procs[-1].communicate()
+            exit_code = procs[-1].returncode
+
+            if out:
+                sys.stdout.buffer.write(out)
             if err:
-                sys.stderr.write(err.decode(errors="ignore"))
+                sys.stderr.buffer.write(err)
+
+        last_status = exit_code  # cập nhật mã thoát cuối cùng
+
+        if exit_code != 0:
+            print(f"minishell: process exited with code {exit_code}")
 
     finally:
         for f in opened_files:
@@ -255,7 +322,6 @@ def execute_pipeline(cmds, background=False):
                 f.close()
             except Exception:
                 pass
-
 
 # ---------- Prompt & main loop ----------
 def prompt():
@@ -266,7 +332,8 @@ def prompt():
 
 
 def main_loop():
-    init_readline()  # Cấu hình readline trước
+    global last_status
+    init_readline()
     load_history()
     try:
         while True:
@@ -278,35 +345,67 @@ def main_loop():
             except KeyboardInterrupt:
                 print("", flush=True)
                 continue
+
             if not line:
                 continue
 
+            # Thay thế biến $? trước khi chạy
+            if "$?" in line:
+                line = line.replace("$?", str(last_status))
+
             readline.add_history(line)
 
+            # ---- Builtins ----
             if line.startswith("cd"):
                 path = line[3:].strip() or os.path.expanduser("~")
                 try:
                     os.chdir(os.path.expanduser(path))
+                    last_status = 0
                 except Exception as e:
                     print(f"cd: {e}")
-                continue
-            if line == "exit":
-                break
-            if line == "help":
-                builtin_help()
-                continue
-            if line == "history":
-                builtin_history()
+                    last_status = 1
                 continue
 
-            # ---- External / pipeline ----
+            if line == "exit":
+                last_status = 0
+                break
+
+            if line == "help":
+                builtin_help()
+                last_status = 0
+                continue
+
+            if line == "history":
+                builtin_history()
+                last_status = 0
+                continue
+
+            if line == "pmon":
+                builtin_pmon()
+                last_status = 0
+                continue
+
+            # ---- External / Pipeline ----
             cmds, background = parse_command(line)
             if cmds:
                 execute_pipeline(cmds, background)
-    finally:
-        save_history()
-        print("Goodbye!")
 
+    finally:
+        try:
+            save_history()
+        except Exception as e:
+            print(f"Warning: Could not save history: {e}", file=sys.stderr)
+
+        # ---- Cleanup background jobs ----
+        for pid in list(background_jobs.keys()):
+            try:
+                os.kill(pid, signal.SIGTERM)
+                print(f"Terminated background job [{pid}]")
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                print(f"Could not terminate job {pid}: {e}")
+        print("Goodbye!")
 
 if __name__ == "__main__":
     main_loop()
