@@ -103,30 +103,6 @@ def builtin_history():
     for i in range(1, hlen + 1):
         print(f"{i}\t{readline.get_history_item(i)}")
 
-
-def builtin_pmon(interval=1.5, top_n=20):
-    """Simple process monitor using psutil. Press Ctrl+C to return to shell."""
-    try:
-        while True:
-            os.system("clear")
-            procs = []
-            for p in psutil.process_iter(["pid", "name", "cpu_percent", "memory_percent"]):
-                try:
-                    cpu = p.info["cpu_percent"] or p.cpu_percent(interval=0)
-                    procs.append((p.info["pid"], p.info["name"] or "?", cpu, p.info["memory_percent"] or 0.0))
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
-            procs.sort(key=lambda x: x[2], reverse=True)
-            print(f"{'PID':<8} {'Name':<28} {'CPU%':>6} {'MEM%':>6}")
-            print("-" * 55)
-            for pid, name, cpu, mem in procs[:top_n]:
-                print(f"{pid:<8} {name[:26]:<28} {cpu:6.2f} {mem:6.2f}")
-            print(f"\nPress Ctrl+C to return. Refresh: {interval}s")
-            time.sleep(interval)
-    except KeyboardInterrupt:
-        print("\nReturning to shell...")
-
-
 # ---------- Signal ----------
 def handle_sigint(signum, frame):
     # Ctrl+C tại prompt chỉ xuống dòng, không thoát shell
@@ -305,7 +281,6 @@ def main_loop():
             if not line:
                 continue
 
-            # Lưu vào history (quan trọng!)
             readline.add_history(line)
 
             if line.startswith("cd"):
@@ -322,9 +297,6 @@ def main_loop():
                 continue
             if line == "history":
                 builtin_history()
-                continue
-            if line.startswith("pmon"):
-                builtin_pmon()
                 continue
 
             # ---- External / pipeline ----
