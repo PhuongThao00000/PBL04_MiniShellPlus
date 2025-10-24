@@ -1,8 +1,0 @@
-#!/bin/sh
-echo "Helu Thao cute ^^"
-echo "Cho em con beat beat"
-for i in i love u
-	do
-		echo $i
-	done
-exit 0
