@@ -5,6 +5,8 @@ import os
 import signal
 import psutil
 
+from Core.prompt import get_prompt
+
 # luu cac tien trinh chay nen dang hoat dong
 bg_jobs = {}
 
@@ -56,9 +58,4 @@ def cleanup_bg():
             print(f"Da dung tien trinh [{pid}]")
         except:
             pass
-
-
-# xu ly khi bam Ctrl+C
-def sigint_handler(sig, frame):
-    print()  # chi xuong dong, khong tat shell
 
