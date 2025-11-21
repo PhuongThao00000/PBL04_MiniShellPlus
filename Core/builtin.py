@@ -2,6 +2,7 @@ import os
 import shlex
 from Core.history import show_history
 from Core.job_control import show_jobs
+from Core.process_monitor import start_process_monitor
 
 # Alias dictionary
 aliases = {}
@@ -24,6 +25,15 @@ Features:
   Redirection using > >> <
   Background with & (run command in background)
   sudo <cmd>    : run command with root privileges
+  
+Process Monitor (pmon) Controls:
+  /             : search processes by name
+  c             : show top CPU consumers
+  m             : show top Memory consumers
+  r             : reset filter
+  +/-           : adjust refresh interval
+  ↑↓/PgUp/PgDn  : scroll process list
+  q             : quit process monitor
 """)
 
 
@@ -46,7 +56,7 @@ def builtin_history():
 
 def builtin_pmon():
     """Process monitor - show background jobs"""
-    show_jobs()
+    start_process_monitor()
     return 0
 
 
