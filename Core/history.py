@@ -1,6 +1,6 @@
 import os
 import sys
-from config import HISTORY_FILE, MAX_HISTORY
+from Config.config import HISTORY_FILE, MAX_HISTORY
 
 try:
     import readline

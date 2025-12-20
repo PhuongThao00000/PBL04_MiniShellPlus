@@ -1,6 +1,7 @@
 import os
 import sys
 import re
+import shlex
 from Core.history import init_readline, load_history, save_history
 from Core.job_control import init_signal_handlers, cleanup_jobs
 from Core.builtin import execute_builtin, expand_alias
@@ -13,10 +14,19 @@ last_status = 0
 
 def prompt():
     """Generate shell prompt"""
-    user = os.getenv("USER") or os.getenv("USERNAME") or "user"
     cwd = os.getcwd()
     base = os.path.basename(cwd) or "/"
-    return f"{user}@minishell:{base}$ "
+
+    GREEN = "\033[92m"
+    RESET = "\033[0m"
+
+    return f"{GREEN}minishell:{base}$ {RESET}"
+
+
+def continuation_prompt():
+    """Generate continuation prompt for multi-line input"""
+    return "> "
+
 
 def expand_variables(line):
     """
@@ -29,10 +39,55 @@ def expand_variables(line):
     # Thay thế ${VAR}
     line = re.sub(r'\$\{(\w+)\}', lambda m: os.getenv(m.group(1), ''), line)
 
-    # Thay thế $VAR
-    line = re.sub(r'\$(\w+)', lambda m: os.getenv(m.group(1), ''), line)
+    # Thay thế $VAR (không bắt đầu bằng số)
+    line = re.sub(r'\$([a-zA-Z_]\w*)', lambda m: os.getenv(m.group(1), ''), line)
 
     return line
+
+
+def is_incomplete_command(line):
+    """
+    Kiểm tra xem command có hoàn chỉnh không (quote đã đóng chưa)
+    Returns: True nếu chưa hoàn chỉnh (cần nhập tiếp)
+    """
+    try:
+        # Thử parse với shlex
+        shlex.split(line)
+        return False
+    except ValueError:
+        # Nếu có lỗi parse -> quote chưa đóng
+        return True
+
+
+def read_multiline_command():
+    """
+    Đọc command, hỗ trợ multi-line nếu quote chưa đóng
+    Returns: complete command string hoặc None nếu EOF/Interrupt
+    """
+    try:
+        line = input(prompt()).strip()
+    except EOFError:
+        return None
+    except KeyboardInterrupt:
+        print()
+        return ""
+
+    # Kiểm tra nếu command chưa hoàn chỉnh (quote chưa đóng)
+    while is_incomplete_command(line):
+        try:
+            # Nhập tiếp với prompt ">"
+            continuation = input(continuation_prompt())
+            line += "\n" + continuation
+        except EOFError:
+            print("\nminishell: syntax error: unexpected end of file")
+            return ""
+        except KeyboardInterrupt:
+            print("\nminishell: syntax error: command interrupted")
+            return ""
+
+    return line
+
+
 def main_loop():
     """Main shell loop"""
     global last_status
@@ -44,18 +99,19 @@ def main_loop():
 
     try:
         while True:
-            try:
-                line = input(prompt()).strip()
-            except EOFError:
+            # Đọc command (hỗ trợ multi-line)
+            line = read_multiline_command()
+
+            # Xử lý EOF
+            if line is None:
                 print()
                 break
-            except KeyboardInterrupt:
-                print()
-                continue
 
+            # Skip empty lines
             if not line:
                 continue
 
+            # Expand variables
             line = expand_variables(line)
 
             # Check for exit
